@@ -1,0 +1,65 @@
+from elasticsearch import Elasticsearch
+from elasticsearch import RequestsHttpConnection
+from elasticsearch.helpers import scan
+from pycaret.anomaly import *
+import pandas as pd
+import datetime
+import warnings
+warnings.filterwarnings("ignore")
+import time
+import pytz
+kst = pytz.timezone('Asia/Seoul')
+
+start_time = time.time()
+
+#Elasticsearch 접속
+es = Elasticsearch(['localhost:9200'], connection_class=RequestsHttpConnection,
+                   use_ssl=True, verify_certs=False, http_auth=(id, password), timeout=300)
+
+index = ["firewall_*"]
+body = {
+    "query": {
+        "bool": {
+            "must_not": {
+            }
+        }
+    }
+}
+results = scan(es, index=index, query=body)
+
+result_list = []
+fields = ["dst_ip", "src_ip", "dst_port", "src_port", "stime", "proto", 'r_pkts', 's_pkts']
+
+#검색 결과 처리
+for result in results:
+    fields_dict = {}
+    for field in fields:
+        try:
+            fields_dict[field] = result["_source"].get(field, None)
+            # 실행할 코드
+        except:
+            continue
+
+    result_list.append(fields_dict)
+
+    if len(result_list) >= 30000:
+        break
+
+
+#데이터 프레임 변환
+train = pd.DataFrame(result_list)
+
+#null값 drop
+train.dropna()
+
+
+#pycaret iforest 학습
+s = setup(train,
+          normalize=True,                # 데이터 정규화
+          session_id=123)                # 시드(SEED) 지정
+
+# isolation forest 모델 생성
+iforest = create_model('iforest')
+
+#학습한 모델 저장
+save_model(iforest, 'detect_model')
